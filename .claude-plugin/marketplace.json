@@ -1,0 +1,14 @@
+{
+  "name": "crab-crew",
+  "owner": {
+    "name": "alfabaykal"
+  },
+  "plugins": [
+    {
+      "name": "crab-crew",
+      "source": "./",
+      "description": "Pixel crabs above the prompt for every subagent and child session, dressed for what each one is doing."
+    }
+  ],
+  "description": "crab-crew: pixel crabs above the prompt for every subagent and child session."
+}
