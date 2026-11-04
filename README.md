@@ -1,4 +1,10 @@
+<p align="center">
+  <img src="assets/crab-crew.svg" alt="A parade of pixel crabs: one waiting with a question, one coding at a laptop, one building in a hard hat, then small subagent crabs reading, testing, reviewing and three done">
+</p>
+
 # crab-crew
+
+[![GitHub stars](https://img.shields.io/github/stars/alfabaykal/crab-crew)](https://github.com/alfabaykal/crab-crew/stargazers)
 
 A Claude Code mod that shows who your session has put to work. Every subagent it spawns and every child session it starts joins a parade of pixel crabs on one line above the prompt. Each crab dresses for the job: a detective's hat while it reads code, a lab coat while tests run, a hard hat during a build, a nightcap while it waits. A crab waiting for your answer leads the parade and gives a shake every few seconds. A finished session stands under a green tick until you archive it in the app. A child session is a full-size crab, a subagent a small one. Finished subagents fold into one small crab with a count. Each crab moves at its own work in place, and stands still when the system asks for reduced motion.
 
