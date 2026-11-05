@@ -17,6 +17,7 @@ export type Member = {
   thought?: string
   branch?: string
   worktree?: string
+  path?: string // a child session's folder, where its transcript is found
   agentType?: string
   seenAt?: number // when the crab first joined, for its one entrance
 }
@@ -32,6 +33,6 @@ export type Crew = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'crab-crew': { crew: Shaped<Crew>; clock: Shaped<number>; cast: Shaped<Cast>; doneOpen: Shaped<boolean> }
+    'crab-crew': { crew: Shaped<Crew>; clock: Shaped<number>; cast: Shaped<Cast>; doneOpen: Shaped<boolean>; parent: Shaped<boolean> }
   }
 }

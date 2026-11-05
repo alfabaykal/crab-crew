@@ -21,7 +21,7 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 ## What it reads
 
 - **Subagents.** The session's own events: when a subagent starts, each of its model steps, and how its turn ends.
-- **Child sessions.** In the Claude desktop app only. The app's session tools list the sessions this one started, with model, effort and branch. The tail of each one's transcript says what it is doing now and what it said last. Nothing is sent anywhere, and no model call is made for the band.
+- **Child sessions.** In the Claude desktop app only. The app's session tools list the sessions this one started, with model, effort and branch. A session asks them only once it has started a session of its own, and then only as its own turns start and end and when you open the pane: a call to them runs every tool hook you have installed, so a session with no children asks nothing. Between those calls the tail of each child's transcript on disk says what it is doing now and what it said last. Nothing is sent anywhere, and no model call is made for the band.
 
 In a terminal the parade is a row of glyphs and the cards are plain text.
 

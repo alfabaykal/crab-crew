@@ -22,22 +22,29 @@ const cast = atom({ plugin: 'crab-crew', key: 'cast' } as const, [] as Cast, { s
 // Whether the pane shows the finished subagents' cards or folds them into one line.
 const doneOpen = atom({ plugin: 'crab-crew', key: 'doneOpen' } as const, false, { shape: 'done-open-1' })
 
+// Whether this session has started a session of its own. Only such a session ever asks the app about sessions:
+// every `$.mcp.call` runs through all the tool hooks, the user's included, so a session that started none pays nothing.
+const parent = atom({ plugin: 'crab-crew', key: 'parent' } as const, false, { shape: 'parent-1' })
+
 const SESSIONS = 'ccd_session_mgmt'
 const WINDOW = 'ccd_window'
 const VIEW = 'ccd_view'
-const POLL_EVERY = 3 // ticks of one second
-const META_TTL = 30_000
+// How often, in one-second ticks, the children's transcripts are looked at between syncs. Reading them asks no tool.
+const LIVE_EVERY = 10
+const STARTS = ['mcp__ccd_session__start_session', 'mcp__ccd_session__hand_off_to_session']
 const KEEP_AGENTS = 20
 const TAIL_BYTES = '65536'
 
-// Module state: rebuilt after a reload, and the next poll fills it again.
+// Module state: rebuilt after a reload, and the next sync fills it again.
 let lang: Lang = 'en'
 let theme: Theme = 'auto'
 let selfId: string | undefined
 let hasSessionTools = true
 let home = ''
 let tick = 0
-const meta = new Map<string, { at: number; model?: string; effort?: string; path?: string; createdAt?: number; worktree?: string }>()
+let childPending = false
+let syncing = false
+const meta = new Map<string, { model?: string; effort?: string; path?: string; createdAt?: number; worktree?: string }>()
 const tails = new Map<string, { file: string; mtime: number; facts: ReturnType<typeof readTail> }>()
 
 const t = () => STRINGS[lang]
@@ -54,6 +61,14 @@ export const register: Register = (on, options) => {
     // A reload keeps the state, so nothing the band reads changes and the host never draws the reloaded band:
     // write the cast once, as it stands, to draw it.
     await update($, cast, c => [...c]).catch(err => $.ui.log(`crab-crew: ${String(err)}`, { to: 'debug' }))
+    void syncIfParent($)
+    return next(e)
+  })
+
+  // A parent checks its children with the app as each of its own turns starts and ends: a child started from a
+  // card the user clicked, or one archived since, shows up then.
+  on('prompt.submit', async ($, e, next) => {
+    void syncIfParent($)
     return next(e)
   })
 
@@ -82,9 +97,21 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.step', async function* ($, e, next) {
+    // The step after the one that started a session: the start has run, so the app lists the child now.
+    if (!e.agentId && childPending) {
+      childPending = false
+      void syncIfParent($)
+    }
     const result = yield* next(e)
     const agentId = e.agentId
-    if (!agentId) return result
+    if (!agentId) {
+      // A session this one starts: from now on it is a parent.
+      if (result.toolUses.some(u => STARTS.includes(u.name))) {
+        childPending = true
+        await update($, parent, () => true).catch(err => $.ui.log(`crab-crew: ${String(err)}`, { to: 'debug' }))
+      }
+      return result
+    }
     await (async () => {
       const usage = result.usage
       const lastTool = result.toolUses[result.toolUses.length - 1]
@@ -126,6 +153,8 @@ export const register: Register = (on, options) => {
           ),
         }))
       })().catch(err => $.ui.log(`crab-crew: ${String(err)}`, { to: 'debug' }))
+    } else {
+      void syncIfParent($)
     }
     return next(e)
   })
@@ -288,7 +317,10 @@ function refused($: EngineInterface, reason: string): void {
 async function togglePane($: EngineInterface): Promise<void> {
   const isShown = (await $.ui.panes()).some(p => p.id === PANE)
   if (isShown) await $.ui.close({ id: PANE })
-  else await $.ui.open({ id: PANE, title: t().pane })
+  else {
+    await $.ui.open({ id: PANE, title: t().pane })
+    await syncIfParent($)
+  }
 }
 
 const GLYPH: Record<Activity, string> = { research: '🔍', code: '⌨', tests: '🧪', build: '🔨', review: '👓', ask: '❓', wait: '💤', done: '✓', error: '✗' }
@@ -317,14 +349,14 @@ const squashText = (text: string) => {
   return one.length > 220 ? one.slice(0, 219) + '…' : one
 }
 
-async function act($: EngineInterface, call: () => Promise<unknown>, refresh = false): Promise<void> {
+async function act($: EngineInterface, call: () => Promise<unknown>): Promise<void> {
   await call().catch(err => $.ui.log(`crab-crew: ${String(err)}`, { to: 'debug' }))
-  if (refresh) await pollSessions($).catch(() => undefined)
 }
 
+// The timer asks no tool: it reads the children's transcripts and, while someone works, moves the pane's clock.
 async function heartbeat($: EngineInterface): Promise<void> {
   tick += 1
-  if (hasSessionTools && tick % POLL_EVERY === 1) await pollSessions($)
+  if (tick % LIVE_EVERY === 0) await liveTails($)
   const c = await read($, crew)
   if ([...c.agents, ...c.sessions].some(m => m.isRunning)) {
     const at = await $.clock.now()
@@ -341,8 +373,23 @@ async function callJson<T>($: EngineInterface, server: string, tool: string, arg
   return block?.text ? (JSON.parse(block.text) as T) : undefined
 }
 
+// One sync at a time: a turn's start and end that land together ask the app once.
+async function syncIfParent($: EngineInterface): Promise<void> {
+  if (syncing) return
+  syncing = true
+  try {
+    if (!hasSessionTools) return
+    if (!(await read($, parent)) && (await read($, crew)).sessions.length === 0) return
+    await syncSessions($)
+  } catch (err) {
+    $.ui.log(`crab-crew: ${String(err)}`, { to: 'debug' })
+  } finally {
+    syncing = false
+  }
+}
+
 // The children this session started, as the desktop app lists them, with what their transcripts say.
-async function pollSessions($: EngineInterface): Promise<void> {
+async function syncSessions($: EngineInterface): Promise<void> {
   if (!selfId) {
     try {
       selfId = (await callJson<{ sessionId: string }>($, SESSIONS, 'get_session', { session_id: 'self' }))?.sessionId
@@ -359,12 +406,12 @@ async function pollSessions($: EngineInterface): Promise<void> {
   const sessions: Member[] = []
   for (const row of children) {
     let m = meta.get(row.sessionId)
-    if (!m || now - m.at > META_TTL) {
+    // Model, effort and worktree: asked once per child.
+    if (!m) {
       const info = await callJson<{ model?: string; effort?: string; worktreePath?: string; worktreeName?: string; cwd?: string; createdAt?: string }>(
         $, SESSIONS, 'get_session', { session_id: row.sessionId },
       ).catch(() => undefined)
       m = {
-        at: now,
         model: info?.model,
         effort: info?.effort,
         path: info?.worktreePath ?? info?.cwd ?? row.cwd,
@@ -390,10 +437,36 @@ async function pollSessions($: EngineInterface): Promise<void> {
       thought: facts.thought,
       branch: row.branch,
       worktree: m.worktree,
+      path: m.path,
     })
   }
   for (const id of [...meta.keys()]) if (!children.some(c => c.sessionId === id)) { meta.delete(id); tails.delete(id) }
   // Write only what changed: an unchanged list must not redraw the band.
+  if (JSON.stringify(before.sessions) !== JSON.stringify(sessions)) await updateCrew($, c => ({ ...c, sessions }))
+}
+
+// Between syncs: what each child is at, as its transcript says. A finished child is looked at too, since a pause
+// between two of its steps reads as finished; a file not changed since the last look is not read again.
+async function liveTails($: EngineInterface): Promise<void> {
+  const before = await read($, crew)
+  if (before.sessions.length === 0) return
+  const sessions: Member[] = []
+  for (const s of before.sessions) {
+    if (!s.path) {
+      sessions.push(s)
+      continue
+    }
+    const facts = await tailOf($, s.id, s.path)
+    const isRunning = facts.isIdle === undefined ? s.isRunning : !facts.isIdle
+    sessions.push({
+      ...s,
+      isRunning,
+      activity: sessionActivity(isRunning, facts),
+      model: facts.model ?? s.model,
+      context: facts.context ?? s.context,
+      thought: facts.thought ?? s.thought,
+    })
+  }
   if (JSON.stringify(before.sessions) !== JSON.stringify(sessions)) await updateCrew($, c => ({ ...c, sessions }))
 }
 

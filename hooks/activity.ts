@@ -38,6 +38,8 @@ export type TailFacts = {
   model?: string
   context?: number
   isBlocked: boolean
+  // The last row is the session's answer with no tool left waiting: its turn is over. Undefined when nothing was read.
+  isIdle?: boolean
 }
 
 type Block = { type?: string; name?: string; input?: unknown; text?: string; id?: string; tool_use_id?: string }
@@ -61,6 +63,7 @@ export function readTail(text: string): TailFacts {
       if (row.message?.model && !row.message.model.startsWith('<')) facts.model = row.message.model
       const u = row.message?.usage
       if (u) facts.context = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0)
+      facts.isIdle = !content.some(b => b.type === 'tool_use')
       for (const b of content) {
         if (b.type === 'text' && b.text?.trim()) facts.thought = squash(b.text)
         if (b.type === 'tool_use' && b.name) {
@@ -70,6 +73,7 @@ export function readTail(text: string): TailFacts {
         }
       }
     } else if (row.type === 'user') {
+      facts.isIdle = false
       if (content.some(b => b.type === 'tool_result' && b.tool_use_id === pendingId)) pendingId = undefined
     }
   }

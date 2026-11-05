@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import type { Crew } from '../types'
 
@@ -34,9 +34,9 @@ const castOf = (c: Crew) =>
   [...c.sessions, ...c.agents]
     .sort((a, b) => (RANK[a.activity] ?? 2) - (RANK[b.activity] ?? 2) || a.startedAt - b.startedAt)
     .map(m => ({ id: m.id, kind: m.kind, short: m.short, activity: m.activity, isRunning: m.isRunning }))
-function store(on: any, initial: Crew) {
-  const shapes: Record<string, string> = { crew: 'crew-3', cast: 'cast-1', clock: 'clock-1', doneOpen: 'done-open-1' }
-  const values: Record<string, unknown> = { crew: initial, cast: castOf(initial), clock: initial.now, doneOpen: false }
+function store(on: any, initial: Crew, isParent = false) {
+  const shapes: Record<string, string> = { crew: 'crew-3', cast: 'cast-1', clock: 'clock-1', doneOpen: 'done-open-1', parent: 'parent-1' }
+  const values: Record<string, unknown> = { crew: initial, cast: castOf(initial), clock: initial.now, doneOpen: false, parent: isParent }
   const box = {
     version: 1,
     get value() {
@@ -206,4 +206,57 @@ test('a refused switch says what to do about it', { options: { language: 'ru' } 
   await pane.press({ key: 'go:local_a' })
   expect(JSON.stringify(toasts)).toContain("Не открылось: Refused while the user's cursor is in a text field. Убери курсор из поля ввода и нажми ещё раз.")
   await pane.unmount()
+})
+
+// Every `$.mcp.call` runs the tool hooks of the whole setup, so the timer must never make one.
+async function startWithClock($: any, on: any) {
+  const clock = mock.clock(on, { now: T0 })
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/home' : undefined }))
+  on('settings.read', () => ({ value: {} }))
+  on('ui.log', () => ({ value: undefined }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  return clock
+}
+
+test('a session that started no session asks the app nothing, however long it runs', async ($, on) => {
+  store(on, { ...CREW, sessions: [] })
+  const calls: unknown[] = []
+  on('mcp.call', (_: unknown, e: unknown) => (calls.push(e), { value: { isError: false, content: [] } }))
+  const clock = await startWithClock($, on)
+  await clock.advance(10 * 60_000)
+  expect(calls).toEqual([])
+})
+
+test('a parent asks the app as its turn ends, then follows the child from its transcript alone', async ($, on) => {
+  const box = store(on, { ...CREW, sessions: [], agents: [] }, true)
+  const calls: { tool: string }[] = []
+  const json = (v: unknown) => ({ value: { isError: false, content: [{ type: 'text', text: JSON.stringify(v) }] } })
+  on('mcp.call', (_: unknown, e: { tool: string; args: { session_id?: string } }) => {
+    calls.push(e)
+    if (e.tool === 'list_sessions') return json([{ sessionId: 'local_c', title: 'SIS-1: child', startedBy: 'local_self', isRunning: true }])
+    return json(e.args.session_id === 'self' ? { sessionId: 'local_self' } : { cwd: '/w' })
+  })
+  on('turn.complete', () => ({ text: '' }))
+  on('fs.list', () => ({ value: [{ name: 't.jsonl', kind: 'file', mtimeMs: 5, isLink: false, size: 1 }] }))
+  const tails: unknown[] = []
+  const answer = JSON.stringify({ type: 'assistant', message: { model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'Done.' }] } })
+  on('process.run', (_: unknown, e: { argv: readonly string[] }) => (e.argv[0] === 'tail' && tails.push(e), { value: { exitCode: 0, stdout: answer, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  const clock = await startWithClock($, on)
+
+  // A parent already: it asked once as the session started.
+  await clock.settle()
+  expect(calls.map(c => c.tool)).toEqual(['get_session', 'list_sessions', 'get_session'])
+  calls.length = 0
+  await $.turn.complete({ reason: 'answer', answer: 'ok', text: '', turnId: 't' } as never)
+  await clock.settle()
+  expect(calls.map(c => c.tool)).toEqual(['list_sessions'])
+  expect(box.value.sessions.map(m => m.id)).toEqual(['local_c'])
+
+  await clock.advance(10 * 60_000)
+  expect(calls).toHaveLength(1)
+  // The transcript did not change after the first look: read once.
+  expect(tails).toHaveLength(1)
+  // Its last row is an answer with no tool waiting: the child is done.
+  expect(box.value.sessions[0]?.activity).toBe('done')
 })
