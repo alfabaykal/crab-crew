@@ -61,7 +61,8 @@ export const register: Register = (on, options) => {
     // A reload keeps the state, so nothing the band reads changes and the host never draws the reloaded band:
     // write the cast once, as it stands, to draw it.
     await update($, cast, c => [...c]).catch(err => $.ui.log(`crab-crew: ${String(err)}`, { to: 'debug' }))
-    void syncIfParent($)
+    // Once per start, every session asks: children started before this start (or before this version) are found here.
+    void syncIfParent($, true)
     return next(e)
   })
 
@@ -374,12 +375,12 @@ async function callJson<T>($: EngineInterface, server: string, tool: string, arg
 }
 
 // One sync at a time: a turn's start and end that land together ask the app once.
-async function syncIfParent($: EngineInterface): Promise<void> {
+async function syncIfParent($: EngineInterface, isStart = false): Promise<void> {
   if (syncing) return
   syncing = true
   try {
     if (!hasSessionTools) return
-    if (!(await read($, parent)) && (await read($, crew)).sessions.length === 0) return
+    if (!isStart && !(await read($, parent)) && (await read($, crew)).sessions.length === 0) return
     await syncSessions($)
   } catch (err) {
     $.ui.log(`crab-crew: ${String(err)}`, { to: 'debug' })
@@ -402,6 +403,7 @@ async function syncSessions($: EngineInterface): Promise<void> {
   const rows = (await callJson<SessionRow[]>($, SESSIONS, 'list_sessions', { linked: true, limit: 100 })) ?? []
   const now = await $.clock.now()
   const children = rows.filter(r => r.startedBy === selfId && !r.isArchived)
+  if (children.length > 0) await update($, parent, () => true)
   const before = await read($, crew)
   const sessions: Member[] = []
   for (const row of children) {

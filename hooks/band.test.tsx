@@ -219,13 +219,31 @@ async function startWithClock($: any, on: any) {
   return clock
 }
 
-test('a session that started no session asks the app nothing, however long it runs', async ($, on) => {
+const answer = (v: unknown) => ({ value: { isError: false, content: [{ type: 'text', text: JSON.stringify(v) }] } })
+
+test('a session with no children asks the app once as it starts, then nothing, however long it runs', async ($, on) => {
   store(on, { ...CREW, sessions: [] })
-  const calls: unknown[] = []
-  on('mcp.call', (_: unknown, e: unknown) => (calls.push(e), { value: { isError: false, content: [] } }))
+  const calls: { tool: string }[] = []
+  on('mcp.call', (_: unknown, e: { tool: string }) => (calls.push(e), answer(e.tool === 'list_sessions' ? [] : { sessionId: 'local_self' })))
+  on('turn.complete', () => ({ text: '' }))
   const clock = await startWithClock($, on)
+  await clock.settle()
+  expect(calls.map(c => c.tool)).toEqual(['get_session', 'list_sessions'])
+  calls.length = 0
   await clock.advance(10 * 60_000)
+  await $.turn.complete({ reason: 'answer', answer: 'ok', text: '', turnId: 't' } as never)
+  await clock.settle()
   expect(calls).toEqual([])
+})
+
+test('children started before this start (or this version) show up as the session starts', async ($, on) => {
+  const box = store(on, { ...CREW, sessions: [], agents: [] })
+  on('mcp.call', (_: unknown, e: { tool: string; args: { session_id?: string } }) =>
+    answer(e.tool === 'list_sessions' ? [{ sessionId: 'local_c', title: 'SIS-1: child', startedBy: 'local_self', isRunning: true }] : e.args.session_id === 'self' ? { sessionId: 'local_self' } : { cwd: '/w' }))
+  on('fs.list', () => ({ value: [] }))
+  const clock = await startWithClock($, on)
+  await clock.settle()
+  expect(box.value.sessions.map(m => m.id)).toEqual(['local_c'])
 })
 
 test('a parent asks the app as its turn ends, then follows the child from its transcript alone', async ($, on) => {
