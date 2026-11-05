@@ -181,19 +181,27 @@ test('a spawned subagent joins the parade and turns done when its turn ends', as
   await pane.unmount()
 })
 
-test('finished subagents fold into one crab with their count; finished sessions stay one by one', { options: { language: 'en' } }, async ($, on) => {
+test('the finished fold by kind: one big crab with a count for sessions, one small for subagents', { options: { language: 'en' } }, async ($, on) => {
   const done = (id: string) => ({ ...CREW.agents[0]!, id, title: id, short: id })
-  store(on, { ...CREW, sessions: [{ ...CREW.sessions[0]!, activity: 'done', isRunning: false }], agents: [done('a1'), done('a2'), done('a3')] })
+  const doneSession = (id: string) => ({ ...CREW.sessions[0]!, id, short: id, activity: 'done' as const, isRunning: false })
+  store(on, { ...CREW, sessions: [CREW.sessions[0]!, doneSession('s1'), doneSession('s2')], agents: [done('a1'), done('a2'), done('a3')] })
   await start($, on)
   const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const parade = (await band.findAll({ type: 'Svg' }))[0]
-  expect(String(parade?.props.alt)).toBe('байты фото снимаются: done, 3 subagents: done')
+  expect(String(parade?.props.alt)).toBe('байты фото снимаются: writing code, 2 sessions: done, 3 subagents: done')
   const moving = String(parade?.props.source).split('<g class="still">')[0] ?? ''
+  expect(moving).toContain('×2')
   expect(moving).toContain('×3')
-  expect(moving.match(/<svg x=/g)).toHaveLength(2)
+  expect(moving.match(/<svg x=/g)).toHaveLength(3)
   // A session is a full-size crab, the subagents a small one drawn on its own grid.
-  expect(moving).toMatch(/<svg x="0" y="0" width="48" height="32" viewBox="-1 -4 24 16".*<svg x="44" y="8" width="36" height="24" viewBox="-1 -4 18 12"/)
+  expect(moving).toMatch(/<svg x="44" y="0" width="48" height="32" viewBox="-1 -4 24 16".*<svg x="118" y="8" width="36" height="24" viewBox="-1 -4 18 12"/)
   await band.unmount()
+
+  // The pane folds the finished of both kinds into one line.
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await pane.find({ key: 'done' }))?.text).toBe('Done: 5 ›')
+  expect((await pane.findAll({ type: 'Svg' })).length).toBe(1)
+  await pane.unmount()
 })
 
 test('a refused switch says what to do about it', { options: { language: 'ru' } }, async ($, on) => {

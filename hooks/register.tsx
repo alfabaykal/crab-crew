@@ -170,15 +170,20 @@ export const register: Register = (on, options) => {
     // The terminal's table answers Svg with a stand-in that draws nothing: pictures only elsewhere.
     const Svg = e.surface === 'terminal' ? undefined : (ui.Svg as any)
     const wall = await $.clock.now()
-    // Finished subagents fold into one crab with their count; sessions stay one by one until the app drops them.
-    const done = ordered.filter(isDoneAgent)
+    // The finished fold by kind: one big crab with the count for sessions, one small for subagents.
+    const folds = (['session', 'agent'] as const)
+      .map(kind => ({ kind, done: ordered.filter(m => isDone(m) && m.kind === kind) }))
+      .filter(f => f.done.length > 0)
     const lineup = [
-      ...ordered.filter(m => !isDoneAgent(m)),
-      ...(done.length > 0 ? [{ kind: 'agent' as const, activity: 'done' as const, count: done.length, seenAt: done.length === 1 ? done[0]?.seenAt : undefined }] : []),
+      ...ordered.filter(m => !isDone(m)),
+      ...folds.map(f => ({ kind: f.kind, activity: 'done' as const, count: f.done.length, seenAt: f.done.length === 1 ? f.done[0]?.seenAt : undefined })),
     ]
     const picture = lockToClock(paradeSvg(lineup, wall, theme), wall)
     const width = Number(/width="(\d+)"/.exec(picture)?.[1] ?? 0)
-    const alt = [...ordered.filter(m => !isDoneAgent(m)).map(m => `${m.short}: ${t().activity[m.activity]}`), ...(done.length > 0 ? [`${t().summary.agents(done.length)}: ${t().activity.done}`] : [])]
+    const alt = [
+      ...ordered.filter(m => !isDone(m)).map(m => `${m.short}: ${t().activity[m.activity]}`),
+      ...folds.map(f => `${(f.kind === 'session' ? t().summary.sessions : t().summary.agents)(f.done.length)}: ${t().activity.done}`),
+    ]
     const parade = Svg
       ? <Svg key="parade" source={picture} alt={alt.join(', ')} width={width} height={34} />
       : <Text>{lineup.map(m => GLYPH[m.activity] + ('count' in m && m.count > 1 ? `×${m.count}` : '')).join(' ')}</Text>
@@ -208,8 +213,8 @@ export const register: Register = (on, options) => {
     if (members.length === 0) return <Text dimColor>{s.empty}</Text>
     const now = Math.max(await read($, clock), ...members.map(m => m.endedAt ?? m.startedAt))
     const wall = Svg ? await $.clock.now() : now
-    // Finished subagents go last, folded into one line that opens them.
-    const done = members.filter(isDoneAgent)
+    // The finished go last, sessions and subagents alike, folded into one line that opens them.
+    const done = members.filter(isDone)
     const isOpen = await read($, doneOpen)
     const { Button } = ui
     const fold = done.length === 0 ? [] : [
@@ -224,7 +229,7 @@ export const register: Register = (on, options) => {
         <Text dimColor>{m.kind === 'session' ? s.openSession : e.surface === 'terminal' ? s.openTranscript : s.openTasks}</Text>
       </Button>
     )
-    const order = (card: (m: Member) => unknown) => [...members.filter(m => !isDoneAgent(m)).map(card), ...fold, ...(isOpen ? done.map(card) : [])]
+    const order = (card: (m: Member) => unknown) => [...members.filter(m => !isDone(m)).map(card), ...fold, ...(isOpen ? done.map(card) : [])]
 
     if (Svg) {
       return (
@@ -283,7 +288,7 @@ async function updateCrew($: EngineInterface, fn: (c: Crew) => Crew): Promise<vo
   if (JSON.stringify(next) !== JSON.stringify(await read($, cast))) await update($, cast, () => next)
 }
 
-const isDoneAgent = (m: { kind: Member['kind']; activity: Activity }) => m.kind === 'agent' && m.activity === 'done'
+const isDone = (m: { activity: Activity }) => m.activity === 'done'
 
 const visible = (c: Crew) => [...c.sessions, ...c.agents].filter(m => !c.hidden.includes(m.id))
 
