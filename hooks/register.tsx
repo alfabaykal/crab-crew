@@ -39,7 +39,6 @@ const TAIL_BYTES = '65536'
 let lang: Lang = 'en'
 let theme: Theme = 'auto'
 let selfId: string | undefined
-let hasSessionTools = true
 let home = ''
 let tick = 0
 let childPending = false
@@ -55,7 +54,6 @@ export const register: Register = (on, options) => {
     theme = await detectTheme($)
     home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
     selfId = undefined
-    hasSessionTools = true
     tick = 0
     $.clock.every(1000, () => void heartbeat($).catch(err => $.ui.log(`crab-crew: ${String(err)}`, { to: 'debug' })))
     // A reload keeps the state, so nothing the band reads changes and the host never draws the reloaded band:
@@ -386,7 +384,6 @@ async function syncIfParent($: EngineInterface, isStart = false): Promise<void> 
   if (syncing) return
   syncing = true
   try {
-    if (!hasSessionTools) return
     if (!isStart && !(await read($, parent)) && (await read($, crew)).sessions.length === 0) return
     await syncSessions($)
   } catch (err) {
@@ -401,8 +398,8 @@ async function syncSessions($: EngineInterface): Promise<void> {
   if (!selfId) {
     try {
       selfId = (await callJson<{ sessionId: string }>($, SESSIONS, 'get_session', { session_id: 'self' }))?.sessionId
-    } catch {
-      hasSessionTools = false // no desktop app: subagents alone
+    } catch (err) {
+      // No desktop app, or its tools not connected yet: try again at the next sync, never give up for good.
       return
     }
     if (!selfId) return

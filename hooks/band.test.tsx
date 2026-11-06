@@ -245,6 +245,24 @@ test('a session asks the app as it starts and as each of its turns ends, never o
   expect(calls.map(c => c.tool)).toEqual(['list_sessions'])
 })
 
+test('the app not answering at start is tried again at the next turn end', async ($, on) => {
+  const box = store(on, { ...CREW, sessions: [], agents: [] })
+  let isUp = false
+  on('mcp.call', (_: unknown, e: { tool: string; args: { session_id?: string } }) => {
+    if (!isUp) throw new Error('ccd_session_mgmt is not connected')
+    return answer(e.tool === 'list_sessions' ? [{ sessionId: 'local_c', title: 'SIS-3: child', startedBy: 'local_self', isRunning: true }] : e.args.session_id === 'self' ? { sessionId: 'local_self' } : { cwd: '/w' })
+  })
+  on('fs.list', () => ({ value: [] }))
+  on('turn.complete', () => ({ text: '' }))
+  const clock = await startWithClock($, on)
+  await clock.settle()
+  expect(box.value.sessions).toEqual([])
+  isUp = true
+  await $.turn.complete({ reason: 'answer', answer: 'ok', text: '', turnId: 't' } as never)
+  await clock.settle()
+  expect(box.value.sessions.map(m => m.id)).toEqual(['local_c'])
+})
+
 test('a child started in a turn shows up as that turn ends, with no step seen', async ($, on) => {
   const box = store(on, { ...CREW, sessions: [], agents: [] })
   let children: unknown[] = []
