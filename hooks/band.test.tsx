@@ -229,7 +229,7 @@ async function startWithClock($: any, on: any) {
 
 const answer = (v: unknown) => ({ value: { isError: false, content: [{ type: 'text', text: JSON.stringify(v) }] } })
 
-test('a session with no children asks the app once as it starts, then nothing, however long it runs', async ($, on) => {
+test('a session asks the app as it starts and as each of its turns ends, never on the timer', async ($, on) => {
   store(on, { ...CREW, sessions: [] })
   const calls: { tool: string }[] = []
   on('mcp.call', (_: unknown, e: { tool: string }) => (calls.push(e), answer(e.tool === 'list_sessions' ? [] : { sessionId: 'local_self' })))
@@ -239,9 +239,26 @@ test('a session with no children asks the app once as it starts, then nothing, h
   expect(calls.map(c => c.tool)).toEqual(['get_session', 'list_sessions'])
   calls.length = 0
   await clock.advance(10 * 60_000)
+  expect(calls).toEqual([])
   await $.turn.complete({ reason: 'answer', answer: 'ok', text: '', turnId: 't' } as never)
   await clock.settle()
-  expect(calls).toEqual([])
+  expect(calls.map(c => c.tool)).toEqual(['list_sessions'])
+})
+
+test('a child started in a turn shows up as that turn ends, with no step seen', async ($, on) => {
+  const box = store(on, { ...CREW, sessions: [], agents: [] })
+  let children: unknown[] = []
+  on('mcp.call', (_: unknown, e: { tool: string; args: { session_id?: string } }) =>
+    answer(e.tool === 'list_sessions' ? children : e.args.session_id === 'self' ? { sessionId: 'local_self' } : { cwd: '/w' }))
+  on('fs.list', () => ({ value: [] }))
+  on('turn.complete', () => ({ text: '' }))
+  const clock = await startWithClock($, on)
+  await clock.settle()
+  expect(box.value.sessions).toEqual([])
+  children = [{ sessionId: 'local_c', title: 'SIS-2: child', startedBy: 'local_self', isRunning: true }]
+  await $.turn.complete({ reason: 'answer', answer: 'ok', text: '', turnId: 't' } as never)
+  await clock.settle()
+  expect(box.value.sessions.map(m => m.id)).toEqual(['local_c'])
 })
 
 test('children started before this start (or this version) show up as the session starts', async ($, on) => {

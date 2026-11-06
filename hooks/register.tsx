@@ -155,7 +155,9 @@ export const register: Register = (on, options) => {
         }))
       })().catch(err => $.ui.log(`crab-crew: ${String(err)}`, { to: 'debug' }))
     } else {
-      void syncIfParent($)
+      // Every session checks once as its own turn ends: a child started in that turn shows up even when the
+      // step that started it went unseen. One app call per turn; nothing on the timer.
+      void syncIfParent($, true)
     }
     return next(e)
   })
